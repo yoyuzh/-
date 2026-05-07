@@ -1,10 +1,10 @@
 # 量子脆弱算法扫描演示
 
-这个原型用于答辩演示“从代码中自动发现量子脆弱算法”的能力，重点展示对 `RSA`、`DSA`、`DH`、`ECDH`、`ECDSA`、`ECC` 等经典公钥算法的识别。
+这个原型用于演示“从代码中自动发现量子脆弱算法”的能力，重点展示对 `RSA`、`DSA`、`DH`、`ECDH`、`ECDSA`、`ECC` 等经典公钥算法的识别。
 
 ## 演示目标
 
-输入一段 Python 代码，例如：
+输入一段有风险的 Python 代码，例如：
 
 - `from cryptography.hazmat.primitives.asymmetric import rsa`
 - `rsa.generate_private_key(...)`
