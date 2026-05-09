@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+from collections import Counter
+from datetime import datetime, timezone
+from typing import Any
+
+
+def build_summary(sources: list[dict[str, Any]], findings: list[dict[str, Any]]) -> dict[str, Any]:
+    algorithm_counts = Counter(str(finding["algorithm"]) for finding in findings)
+    return {
+        "source_count": len(sources),
+        "finding_count": len(findings),
+        "algorithm_counts": dict(sorted(algorithm_counts.items())),
+    }
+
+
+def markdown_table_cell(value: object) -> str:
+    text = str(value)
+    return text.replace("|", "\\|").replace("\n", "<br>")
+
+
+def build_markdown_report(
+    sources: list[dict[str, Any]],
+    findings: list[dict[str, Any]],
+    source_type: str,
+    scanned_at: str | None = None,
+) -> str:
+    generated_at = scanned_at or datetime.now(timezone.utc).isoformat()
+    summary = build_summary(sources, findings)
+
+    lines = [
+        "# 量子脆弱密码算法扫描报告",
+        "",
+        f"- 扫描时间：{generated_at}",
+        f"- 输入来源：{source_type}",
+        f"- 文件数量：{summary['source_count']}",
+        f"- 风险发现总数：{summary['finding_count']}",
+        "",
+        "## 算法统计",
+        "",
+    ]
+
+    if summary["algorithm_counts"]:
+        lines.extend(["| 算法 | 数量 |", "| --- | ---: |"])
+        for algorithm, count in summary["algorithm_counts"].items():
+            lines.append(f"| {markdown_table_cell(algorithm)} | {count} |")
+    else:
+        lines.append("未发现已知量子脆弱公钥算法用法。")
+
+    lines.extend(["", "## 发现明细", ""])
+
+    if not findings:
+        lines.append("未发现已知量子脆弱公钥算法用法。")
+        return "\n".join(lines)
+
+    lines.extend(
+        [
+            "| 文件 | 行号 | 算法 | 风险等级 | 证据 | 原因 | 迁移建议 |",
+            "| --- | ---: | --- | --- | --- | --- | --- |",
+        ]
+    )
+    for finding in findings:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    markdown_table_cell(finding.get("file_name", "")),
+                    markdown_table_cell(finding.get("line", "")),
+                    markdown_table_cell(finding.get("algorithm", "")),
+                    markdown_table_cell(finding.get("risk_level", "")),
+                    markdown_table_cell(finding.get("evidence", "")),
+                    markdown_table_cell(finding.get("reason", "")),
+                    markdown_table_cell(finding.get("recommendation", "")),
+                ]
+            )
+            + " |"
+        )
+
+    return "\n".join(lines)

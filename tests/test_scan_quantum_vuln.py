@@ -1,10 +1,14 @@
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
-from scan_quantum_vuln import format_findings, scan_code_for_crypto, scan_with_regex
+from scan_quantum_vuln import (
+    format_findings,
+    scan_code_for_crypto,
+    scan_source_for_crypto,
+    scan_with_regex,
+)
 
 
 class QuantumScannerTests(unittest.TestCase):
@@ -13,6 +17,7 @@ class QuantumScannerTests(unittest.TestCase):
         self.assertTrue(findings)
         self.assertEqual(findings[0]["algorithm"], "RSA")
         self.assertEqual(findings[0]["line"], 15)
+        self.assertEqual(findings[0]["file_name"], "sample_rsa_code.py")
         self.assertIn("高风险", findings[0]["risk_level"])
 
     def test_formats_human_readable_summary(self) -> None:
@@ -22,9 +27,9 @@ class QuantumScannerTests(unittest.TestCase):
         self.assertIn("第15行", summary)
 
     def test_regex_fallback_ignores_strings_and_comments(self) -> None:
-        source = '\n'.join(
+        source = "\n".join(
             [
-                '# rsa.generate_private_key() should not be reported',
+                "# rsa.generate_private_key() should not be reported",
                 'doc = "rsa.generate_private_key()"',
                 "message = 'ECDH() is only text here'",
             ]
@@ -39,13 +44,11 @@ class QuantumScannerTests(unittest.TestCase):
                 "signature = curves.ECDSA(",
             ]
         )
-        with tempfile.TemporaryDirectory() as temp_dir:
-            test_file = Path(temp_dir) / "broken_sample.py"
-            test_file.write_text(broken_source, encoding="utf-8")
-            findings = scan_code_for_crypto(test_file)
+        findings = scan_source_for_crypto(broken_source, filename="broken_sample.py")
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["algorithm"], "ECDSA")
         self.assertEqual(findings[0]["line"], 2)
+        self.assertEqual(findings[0]["file_name"], "broken_sample.py")
 
     def test_plain_method_names_do_not_trigger_false_positives(self) -> None:
         source = "\n".join(
@@ -55,16 +58,14 @@ class QuantumScannerTests(unittest.TestCase):
                 "SigningKey.generate()",
             ]
         )
-        with tempfile.TemporaryDirectory() as temp_dir:
-            test_file = Path(temp_dir) / "safe_sample.py"
-            test_file.write_text(source, encoding="utf-8")
-            findings = scan_code_for_crypto(test_file)
+        findings = scan_source_for_crypto(source, filename="safe_sample.py")
         self.assertEqual(findings, [])
 
     def test_missing_file_returns_non_zero_exit_code(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
-            [sys.executable, "scan_quantum_vuln.py", "missing_demo_file.py"],
-            cwd="/Users/mac/Documents/daChuang",
+            [sys.executable, "-B", "scan_quantum_vuln.py", "missing_demo_file.py"],
+            cwd=repo_root,
             capture_output=True,
             text=True,
             check=False,

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>抗量子迁移风险扫描平台</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Post-Quantum Migration</p>
+          <h1>传统公钥算法风险扫描平台</h1>
+        </div>
+        <button id="exportReport" class="secondary-button" type="button" disabled>
+          导出 Markdown 报告
+        </button>
+      </header>
+
+      <section class="workspace">
+        <aside class="input-panel">
+          <div class="segmented-control" aria-label="输入方式">
+            <button id="snippetMode" class="active" type="button">代码片段</button>
+            <button id="fileMode" type="button">多文件上传</button>
+          </div>
+
+          <section id="snippetPanel" class="input-stack">
+            <label>
+              <span>文件名</span>
+              <input id="snippetFilename" value="snippet.py" />
+            </label>
+            <label class="code-input-label">
+              <span>代码内容</span>
+              <textarea id="snippetContent" spellcheck="false"></textarea>
+            </label>
+          </section>
+
+          <section id="filePanel" class="upload-panel hidden">
+            <label class="upload-target">
+              <span class="upload-title">选择 Python 代码文件</span>
+              <span class="upload-hint">支持 .py、.pyw、.txt，可一次选择多个文件</span>
+              <input id="fileInput" type="file" multiple accept=".py,.pyw,.txt" />
+            </label>
+            <div id="fileList" class="file-list">
+              <span class="muted">尚未选择文件</span>
+            </div>
+          </section>
+
+          <button id="scanButton" class="primary-button" type="button">开始扫描</button>
+          <div id="errorBanner" class="error-banner hidden"></div>
+        </aside>
+
+        <section class="results-panel">
+          <div class="summary-grid">
+            <div class="summary-item">
+              <span>文件</span>
+              <strong id="sourceCount">0</strong>
+            </div>
+            <div class="summary-item">
+              <span>发现</span>
+              <strong id="findingCount">0</strong>
+            </div>
+            <div class="summary-item">
+              <span>算法</span>
+              <strong id="algorithmCount">0</strong>
+            </div>
+          </div>
+
+          <div id="emptyState" class="empty-state">等待扫描</div>
+          <div id="resultGroups" class="result-groups hidden"></div>
+
+          <section class="code-preview">
+            <div class="preview-header">
+              <h2 id="previewTitle">代码预览</h2>
+              <span id="previewLine"></span>
+            </div>
+            <pre id="codePreview" class="preview-empty">暂无代码内容</pre>
+          </section>
+        </section>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

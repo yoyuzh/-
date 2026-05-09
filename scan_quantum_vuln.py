@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import io
 import json
 import re
@@ -412,10 +413,17 @@ def merge_findings(findings: Iterable[Finding]) -> list[Finding]:
     )
 
 
-def scan_code_for_crypto(file_path: str | Path) -> list[dict[str, str | int]]:
-    path = Path(file_path)
-    source = path.read_text(encoding="utf-8")
+def make_source_id(filename: str, source: str) -> str:
+    digest = hashlib.sha256(f"{filename}\0{source}".encode("utf-8")).hexdigest()
+    return f"src_{digest[:12]}"
 
+
+def scan_source_for_crypto(
+    source: str,
+    filename: str = "snippet.py",
+    source_type: str = "snippet",
+    source_id: str | None = None,
+) -> list[dict[str, str | int]]:
     try:
         visitor = analyze_with_ast(source)
         ast_findings = sorted(visitor.findings, key=lambda item: (item.line, item.algorithm))
@@ -426,7 +434,22 @@ def scan_code_for_crypto(file_path: str | Path) -> list[dict[str, str | int]]:
 
     regex_findings = scan_with_regex(source, aliases=aliases)
     findings = merge_findings([*ast_findings, *regex_findings])
-    return [asdict(item) for item in findings]
+    resolved_source_id = source_id or make_source_id(filename, source)
+    return [
+        {
+            **asdict(item),
+            "source_id": resolved_source_id,
+            "file_name": filename,
+            "source_type": source_type,
+        }
+        for item in findings
+    ]
+
+
+def scan_code_for_crypto(file_path: str | Path) -> list[dict[str, str | int]]:
+    path = Path(file_path)
+    source = path.read_text(encoding="utf-8")
+    return scan_source_for_crypto(source, filename=path.name, source_type="manual_upload")
 
 
 def format_findings(findings: list[dict[str, str | int]]) -> str:
