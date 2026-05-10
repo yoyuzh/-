@@ -300,6 +300,16 @@ textarea:focus {
   line-height: 1;
 }
 
+.scan-meta {
+  border: 1px solid #dbe3df;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f8faf8;
+  color: #4f625b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .empty-state {
   display: flex;
   min-height: 180px;
@@ -327,8 +337,7 @@ textarea:focus {
   border-radius: 8px;
 }
 
-.file-group-header,
-.preview-header {
+.file-group-header {
   display: flex;
   min-height: 44px;
   align-items: center;
@@ -338,8 +347,7 @@ textarea:focus {
   background: #f8faf8;
 }
 
-.file-group-header span,
-.preview-header span {
+.file-group-header span {
   margin-left: auto;
   color: #64736e;
   font-size: 13px;
@@ -374,33 +382,75 @@ td {
 }
 
 tbody tr {
-  cursor: pointer;
+  cursor: default;
 }
 
-tbody tr:hover,
-tbody tr.selected {
+tbody tr.finding-row:hover {
   background: #eef6f3;
 }
 
-.code-preview {
+.code-toggle {
+  min-width: 86px;
+  min-height: 30px;
+  border: 1px solid #c9d8d2;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #116454;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.code-toggle:hover {
+  background: #edf6f3;
+}
+
+.code-detail-row td {
+  padding: 0 12px 12px;
+  background: #fbfcfb;
+}
+
+.inline-code-card {
   overflow: hidden;
   border: 1px solid #dbe3df;
   border-radius: 8px;
+  background: #ffffff;
 }
 
-#codePreview {
-  max-height: 280px;
+.inline-code-header {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #e1e9e5;
+  padding: 0 12px;
+  background: #f8faf8;
+  color: #2b443d;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.inline-code-header strong {
+  color: #116454;
+  white-space: nowrap;
+}
+
+.inline-code-preview {
+  max-height: 220px;
   overflow: auto;
   margin: 0;
-  background: #111a18;
-  color: #d7e4de;
+  background: #fbfcfb;
+  color: #1f302c;
   font-family: Consolas, "JetBrains Mono", monospace;
   font-size: 13px;
   line-height: 1.55;
 }
 
-.preview-empty {
-  padding: 24px;
+.inline-code-empty {
+  border: 1px solid #dbe3df;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfb;
   color: #6f7d78;
 }
 
@@ -408,20 +458,26 @@ tbody tr.selected {
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr);
   min-height: 22px;
-  padding-right: 12px;
+  padding: 0 12px 0 0;
   white-space: pre;
 }
 
 .line-number {
   user-select: none;
   padding-right: 12px;
-  color: #78908a;
+  color: #8a9993;
   text-align: right;
 }
 
 .active-line {
-  background: #21463f;
-  color: #ffffff;
+  border-left: 3px solid #116454;
+  background: #e2f1ec;
+  color: #163b33;
+  font-weight: 700;
+}
+
+.active-line .line-number {
+  color: #116454;
 }
 
 .hidden {

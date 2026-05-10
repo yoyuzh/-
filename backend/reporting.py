@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def beijing_now_iso() -> str:
+    return datetime.now(BEIJING_TZ).isoformat(timespec="seconds")
 
 
 def build_summary(sources: list[dict[str, Any]], findings: list[dict[str, Any]]) -> dict[str, Any]:
@@ -25,7 +31,7 @@ def build_markdown_report(
     source_type: str,
     scanned_at: str | None = None,
 ) -> str:
-    generated_at = scanned_at or datetime.now(timezone.utc).isoformat()
+    generated_at = scanned_at or beijing_now_iso()
     summary = build_summary(sources, findings)
 
     lines = [

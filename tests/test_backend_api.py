@@ -28,6 +28,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(payload["findings"][0]["file_name"], "demo.py")
         self.assertEqual(payload["findings"][0]["line"], 2)
         self.assertEqual(payload["findings"][0]["algorithm"], "RSA")
+        self.assertTrue(payload["scanned_at"].endswith("+08:00"))
 
     def test_root_serves_web_app(self) -> None:
         response = self.client.get("/")
@@ -84,6 +85,7 @@ class BackendApiTests(unittest.TestCase):
         self.assertIn("report_demo.py", response.text)
         self.assertIn("RSA", response.text)
         self.assertIn("风险发现总数：1", response.text)
+        self.assertIn("+08:00", response.text)
 
     def test_markdown_report_handles_clean_sources(self) -> None:
         scan_response = self.client.post(

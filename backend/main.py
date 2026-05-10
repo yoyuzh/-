@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
@@ -12,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend.reporting import build_markdown_report, build_summary
+from backend.reporting import beijing_now_iso, build_markdown_report, build_summary
 from scan_quantum_vuln import make_source_id, scan_source_for_crypto
 
 MAX_SOURCE_BYTES = 2 * 1024 * 1024
@@ -84,7 +83,7 @@ def build_scan_response(
     documents: list[tuple[str, str]],
     source_type: SourceType,
 ) -> ScanResponse:
-    scanned_at = datetime.now(timezone.utc).isoformat()
+    scanned_at = beijing_now_iso()
     sources: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
 
@@ -172,7 +171,7 @@ def health() -> dict[str, str]:
 
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
-    return FileResponse(WEB_DIR / "index.html")
+    return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/scan/snippet", response_model=ScanResponse)

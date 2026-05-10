@@ -11,7 +11,7 @@ const state = {
   mode: "snippet",
   files: [],
   result: null,
-  selectedFinding: null,
+  expandedFindingKeys: new Set(),
 };
 
 const elements = {
@@ -29,11 +29,9 @@ const elements = {
   sourceCount: document.querySelector("#sourceCount"),
   findingCount: document.querySelector("#findingCount"),
   algorithmCount: document.querySelector("#algorithmCount"),
+  scanTime: document.querySelector("#scanTime"),
   emptyState: document.querySelector("#emptyState"),
   resultGroups: document.querySelector("#resultGroups"),
-  previewTitle: document.querySelector("#previewTitle"),
-  previewLine: document.querySelector("#previewLine"),
-  codePreview: document.querySelector("#codePreview"),
 };
 
 elements.snippetContent.value = exampleCode;
@@ -45,6 +43,15 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function findingKey(finding) {
+  return [
+    finding.source_id,
+    finding.line,
+    finding.algorithm,
+    finding.evidence,
+  ].join("::");
 }
 
 function setMode(mode) {
@@ -129,38 +136,59 @@ function sourceForFinding(finding) {
   if (!state.result) {
     return null;
   }
-  if (!finding) {
-    return state.result.sources[0] || null;
-  }
   return state.result.sources.find((source) => source.source_id === finding.source_id) || null;
 }
 
-function renderPreview() {
-  const source = sourceForFinding(state.selectedFinding);
+function renderCodeSnippet(finding) {
+  const source = sourceForFinding(finding);
   if (!source) {
-    elements.previewTitle.textContent = "代码预览";
-    elements.previewLine.textContent = "";
-    elements.codePreview.className = "preview-empty";
-    elements.codePreview.textContent = "暂无代码内容";
-    return;
+    return '<div class="inline-code-empty">暂无代码内容</div>';
   }
 
-  const targetLine = state.selectedFinding ? state.selectedFinding.line : 1;
   const lines = source.content.split(/\r?\n/);
-  const start = Math.max(1, targetLine - 3);
-  const end = Math.min(lines.length, targetLine + 3);
+  const start = Math.max(1, finding.line - 3);
+  const end = Math.min(lines.length, finding.line + 3);
   const visible = lines.slice(start - 1, end);
 
-  elements.previewTitle.textContent = source.file_name;
-  elements.previewLine.textContent = state.selectedFinding ? `第 ${targetLine} 行` : "";
-  elements.codePreview.className = "";
-  elements.codePreview.innerHTML = visible
-    .map((line, index) => {
-      const number = start + index;
-      const active = number === targetLine ? " active-line" : "";
-      return `<code class="code-line${active}"><span class="line-number">${number}</span>${escapeHtml(
-        line || " "
-      )}</code>`;
+  return `
+    <div class="inline-code-card">
+      <div class="inline-code-header">
+        <span>${escapeHtml(source.file_name)}</span>
+        <strong>第 ${finding.line} 行</strong>
+      </div>
+      <pre class="inline-code-preview">${visible
+        .map((line, index) => {
+          const number = start + index;
+          const active = number === finding.line ? " active-line" : "";
+          return `<code class="code-line${active}"><span class="line-number">${number}</span>${escapeHtml(
+            line || " "
+          )}</code>`;
+        })
+        .join("")}</pre>
+    </div>`;
+}
+
+function renderFindingsRows(fileFindings) {
+  return fileFindings
+    .map((finding) => {
+      const key = findingKey(finding);
+      const expanded = state.expandedFindingKeys.has(key);
+      return `
+        <tr class="finding-row">
+          <td>${finding.line}</td>
+          <td>${escapeHtml(finding.algorithm)}</td>
+          <td>${escapeHtml(finding.risk_level)}</td>
+          <td>${escapeHtml(finding.evidence)}</td>
+          <td>${escapeHtml(finding.recommendation)}</td>
+          <td>
+            <button class="code-toggle" type="button" data-finding-key="${escapeHtml(key)}">
+              ${expanded ? "收起代码" : "展开代码"}
+            </button>
+          </td>
+        </tr>
+        <tr class="code-detail-row${expanded ? "" : " hidden"}" data-detail-key="${escapeHtml(key)}">
+          <td colspan="6">${renderCodeSnippet(finding)}</td>
+        </tr>`;
     })
     .join("");
 }
@@ -174,13 +202,14 @@ function renderResults() {
   elements.sourceCount.textContent = sources;
   elements.findingCount.textContent = findings;
   elements.algorithmCount.textContent = algorithms;
+  elements.scanTime.textContent = result ? `扫描时间：${result.scanned_at}（北京时间）` : "";
+  elements.scanTime.classList.toggle("hidden", !result);
   elements.exportReport.disabled = !result;
 
   if (!result) {
     elements.emptyState.className = "empty-state";
     elements.emptyState.textContent = "等待扫描";
     elements.resultGroups.classList.add("hidden");
-    renderPreview();
     return;
   }
 
@@ -188,7 +217,6 @@ function renderResults() {
     elements.emptyState.className = "empty-state success";
     elements.emptyState.textContent = "未发现已知量子脆弱公钥算法用法";
     elements.resultGroups.classList.add("hidden");
-    renderPreview();
     return;
   }
 
@@ -212,50 +240,27 @@ function renderResults() {
                   <th>风险</th>
                   <th>证据</th>
                   <th>迁移建议</th>
+                  <th>代码定位</th>
                 </tr>
               </thead>
-              <tbody>
-                ${fileFindings
-                  .map(
-                    (finding) => `
-                      <tr data-source-id="${escapeHtml(finding.source_id)}" data-line="${finding.line}" data-algorithm="${escapeHtml(
-                        finding.algorithm
-                      )}">
-                        <td>${finding.line}</td>
-                        <td>${escapeHtml(finding.algorithm)}</td>
-                        <td>${escapeHtml(finding.risk_level)}</td>
-                        <td>${escapeHtml(finding.evidence)}</td>
-                        <td>${escapeHtml(finding.recommendation)}</td>
-                      </tr>`
-                  )
-                  .join("")}
-              </tbody>
+              <tbody>${renderFindingsRows(fileFindings)}</tbody>
             </table>
           </div>
         </section>`
     )
     .join("");
 
-  elements.resultGroups.querySelectorAll("tbody tr").forEach((row) => {
-    row.addEventListener("click", () => {
-      const sourceId = row.getAttribute("data-source-id");
-      const line = Number(row.getAttribute("data-line"));
-      const algorithm = row.getAttribute("data-algorithm");
-      state.selectedFinding =
-        state.result.findings.find(
-          (finding) =>
-            finding.source_id === sourceId &&
-            finding.line === line &&
-            finding.algorithm === algorithm
-        ) || null;
-      elements.resultGroups.querySelectorAll("tbody tr").forEach((item) => {
-        item.classList.toggle("selected", item === row);
-      });
-      renderPreview();
+  elements.resultGroups.querySelectorAll(".code-toggle").forEach((button) => {
+    button.addEventListener("click", () => {
+      const key = button.getAttribute("data-finding-key");
+      if (state.expandedFindingKeys.has(key)) {
+        state.expandedFindingKeys.delete(key);
+      } else {
+        state.expandedFindingKeys.add(key);
+      }
+      renderResults();
     });
   });
-
-  renderPreview();
 }
 
 async function runScan() {
@@ -263,7 +268,7 @@ async function runScan() {
   updateScanButton(true);
   try {
     state.result = state.mode === "snippet" ? await scanSnippet() : await scanFiles();
-    state.selectedFinding = state.result.findings[0] || null;
+    state.expandedFindingKeys.clear();
     renderResults();
   } catch (error) {
     showError(error instanceof Error ? error.message : "扫描失败");

@@ -11,6 +11,7 @@
 - 展示文件名、行号、算法、风险等级、证据、原因和迁移建议。
 - 支持点击结果查看对应行附近代码。
 - 支持导出 Markdown 扫描报告。
+- 扫描时间和报告时间使用北京时间 `UTC+08:00`。
 - 后端保留 `source_type` 字段，后续可扩展 GitHub 仓库扫描。
 
 ## 项目结构
@@ -187,7 +188,6 @@ python -B -m unittest discover -s tests -v
 - 访问页面无响应：确认 `python start.py` 仍在运行。
 - 提示端口被占用：`python start.py` 和 `.\scripts\start.ps1` 会自动切换到下一个可用端口；也可以运行 `.\scripts\stop_dev_services.ps1` 清理旧服务。
 - PowerShell 无法运行脚本：使用 `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` 临时放行当前窗口。
-- 不需要再启动 `5173` 端口；整个项目现在只使用 `8000` 端口。
 
 ## 后续扩展方向
 
