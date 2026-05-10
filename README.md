@@ -158,6 +158,22 @@ python -B scan_quantum_vuln.py sample_rsa_code.py --json
   建议：密钥建立迁移到 FIPS 203 ML-KEM；签名迁移到 FIPS 204 ML-DSA。
 ```
 
+## 风险样例文件
+
+项目内置了一组用于 Web 上传测试的风险代码样例：
+
+```text
+sample_inputs/
+├── risky_rsa_cryptography.py
+├── risky_dh_dsa_cryptography.py
+├── risky_ecc_cryptography.py
+├── risky_pycryptodome_rsa_dsa.py
+├── risky_ecdsa_library.py
+└── risky_partial_syntax_fallback.py
+```
+
+这些文件是故意写入传统公钥算法用法的测试输入，不需要实际运行。启动服务后，可以在页面中选择“多文件上传”，一次性上传 `sample_inputs` 目录下的 `.py` 文件进行测试。
+
 ## 测试
 
 运行扫描器和 API 测试：
