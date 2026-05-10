@@ -2,7 +2,7 @@
 
 本项目用于识别 Python 代码中可能需要进行抗量子密码迁移的传统公钥算法用法，例如 `RSA`、`DSA`、`DH`、`ECDH`、`ECDSA`、`ECC`。
 
-当前版本已经改成单服务架构：只启动一次 Python 服务，FastAPI 会同时提供 Web 页面和扫描 API，不再需要分别启动前端与后端。
+当前版本为单服务架构：只启动一次 Python 服务，FastAPI 会同时提供 Web 页面和扫描 API，不再需要分别启动前端与后端。
 
 ## 功能概览
 
@@ -39,8 +39,6 @@
 ```bash
 pip install -r requirements.txt
 ```
-
-现在的 Web 页面不依赖 Vite、React 或 Node 构建流程，因此不用运行 `npm install` 或 `npm run dev`。
 
 ## 一键启动
 
