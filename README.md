@@ -18,7 +18,8 @@
 .
 ├── backend/                 # FastAPI API 与静态页面挂载
 │   ├── main.py              # 路由、上传处理、扫描接口
-│   └── reporting.py         # Markdown 报告生成
+│   ├── reporting.py         # Markdown 报告生成
+│   └── README.md            # 后端接口简要说明
 ├── web/                     # Vue 3 + Vite 前端
 │   ├── src/                 # 前端源码
 │   ├── scripts/             # 前端构建发布脚本
@@ -27,6 +28,7 @@
 │   └── package.json
 ├── scripts/
 │   ├── start_dev.sh         # macOS/Linux 同时启动前后端
+│   ├── start_dev.ps1        # Windows 同时启动前后端
 │   ├── start.ps1            # Windows 后端启动脚本
 │   └── stop_dev_services.ps1
 ├── sample_inputs/           # 风险样例文件
