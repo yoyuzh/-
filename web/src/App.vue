@@ -1,7 +1,6 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch, nextTick } from 'vue';
 
-// --- 常量与默认值 ---
 const DEFAULT_RSA_CODE = `from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -27,35 +26,68 @@ if __name__ == "__main__":
 
     print(signature[:8])`;
 
-// --- 状态变量 ---
-const scanMode = ref('snippet'); // 'snippet' or 'files'
+// --- 主题 ---
+const theme = ref(localStorage.getItem('app-theme') || 'light');
+const toggleTheme = () => { theme.value = theme.value === 'light' ? 'dark' : 'light'; };
+watch(theme, (val) => { localStorage.setItem('app-theme', val); document.documentElement.setAttribute('data-theme', val); });
+onMounted(() => { document.documentElement.setAttribute('data-theme', theme.value); });
+
+// --- 状态 ---
+const scanMode = ref('snippet');
 const snippetFilename = ref('snippet.py');
 const snippetContent = ref(DEFAULT_RSA_CODE);
 const selectedFiles = ref([]);
 const isScanning = ref(false);
 const scanResult = ref(null);
+const scanProgress = ref(0);
 const errorMsg = ref('');
 const expandedFindings = ref(new Set());
 
+// 动画计数器
+const animatedSourceCount = ref(0);
+const animatedFindingCount = ref(0);
+const animatedAlgoCount = ref(0);
+
+// 扫描文本轮播
+const scanMessages = [
+  '⌁ 正在解析语法树…',
+  '⌁ 识别加密算法调用…',
+  '⌁ 评估量子脆弱性…',
+  '⌁ 生成风险分析报告…'
+];
+const scanMsgIndex = ref(0);
+let scanMsgTimer = null;
+
+// 最小扫描动画时长 (ms) — 即使 API 秒返也会等够这段时间
+const MIN_SCAN_DURATION = 2400;
+
 // --- 计算属性 ---
 const fileList = computed(() => selectedFiles.value.map(f => f.name));
-
 const findingsByFile = computed(() => {
   if (!scanResult.value) return {};
   const grouped = {};
-  scanResult.value.findings.forEach(finding => {
-    if (!grouped[finding.file_name]) {
-      grouped[finding.file_name] = [];
-    }
-    grouped[finding.file_name].push(finding);
+  scanResult.value.findings.forEach(f => {
+    if (!grouped[f.file_name]) grouped[f.file_name] = [];
+    grouped[f.file_name].push(f);
   });
   return grouped;
 });
 
-const algorithmStats = computed(() => {
-  if (!scanResult.value) return [];
-  return Object.entries(scanResult.value.summary.algorithm_counts).map(([name, count]) => ({ name, count }));
-});
+const algoCount = computed(() =>
+  scanResult.value ? Object.keys(scanResult.value.summary.algorithm_counts).length : 0
+);
+
+// 风险等级配色
+const riskColors = computed(() => ({
+  '高': { color: 'var(--danger)', bg: 'var(--danger-bg)', border: 'var(--danger)' },
+  '中': { color: 'var(--warning)', bg: 'var(--warning-bg)', border: 'var(--warning)' },
+  '低': { color: 'var(--accent)', bg: 'var(--accent-glow)', border: 'var(--accent)' },
+}));
+
+const getRiskStyle = (level) => {
+  const key = level.includes('高') ? '高' : level.includes('中') ? '中' : '低';
+  return riskColors.value[key] || riskColors.value['低'];
+};
 
 // --- 方法 ---
 const readJsonResponse = async (response, fallbackMessage) => {
@@ -64,95 +96,116 @@ const readJsonResponse = async (response, fallbackMessage) => {
     if (response.ok) return null;
     throw new Error(fallbackMessage || `请求失败（HTTP ${response.status}）`);
   }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error(fallbackMessage || '服务返回了非 JSON 内容，请确认后端 API 已正常启动');
-  }
+  try { return JSON.parse(text); }
+  catch { throw new Error(fallbackMessage || '服务返回了非 JSON 内容'); }
 };
 
-const toggleMode = (mode) => {
-  scanMode.value = mode;
-  errorMsg.value = '';
-};
+const toggleMode = (mode) => { scanMode.value = mode; errorMsg.value = ''; };
 
 const handleFileSelect = (event) => {
   const files = Array.from(event.target.files);
-  // 只接受 .py, .pyw, .txt
   const filtered = files.filter(f => /\.(py|pyw|txt)$/i.test(f.name));
-  selectedFiles.value = filtered;
-  if (filtered.length < files.length) {
-    alert('部分文件格式不支持，仅限 .py, .pyw, .txt');
-  }
+  if (filtered.length < files.length) alert('部分文件格式不支持，仅限 .py, .pyw, .txt');
+  // 合并去重
+  const existing = new Set(selectedFiles.value.map(f => f.name));
+  const merged = [...selectedFiles.value];
+  filtered.forEach(f => {
+    if (!existing.has(f.name)) merged.push(f);
+  });
+  selectedFiles.value = merged;
+};
+
+const removeFile = (index) => {
+  selectedFiles.value.splice(index, 1);
+};
+
+const animateCount = (refVar, target, duration = 700) => {
+  const start = refVar.value;
+  const startTime = performance.now();
+  const step = (now) => {
+    const progress = Math.min((now - startTime) / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    refVar.value = Math.round(start + (target - start) * eased);
+    if (progress < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 };
 
 const startScan = async () => {
   isScanning.value = true;
   errorMsg.value = '';
   scanResult.value = null;
+  scanProgress.value = 0;
   expandedFindings.value = new Set();
 
+  scanMsgIndex.value = 0;
+  scanMsgTimer = setInterval(() => {
+    scanMsgIndex.value = (scanMsgIndex.value + 1) % scanMessages.length;
+  }, 1500);
+
+  // 进度条动画
+  const progressInterval = setInterval(() => {
+    scanProgress.value = Math.min(scanProgress.value + 4, 90);
+  }, 120);
+
   try {
+    const startTime = Date.now();
     let response;
     if (scanMode.value === 'snippet') {
       response = await fetch('/api/scan/snippet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: snippetFilename.value,
-          content: snippetContent.value
-        })
+        body: JSON.stringify({ filename: snippetFilename.value, content: snippetContent.value })
       });
     } else {
-      if (selectedFiles.value.length === 0) {
-        throw new Error('请先选择文件');
-      }
+      if (selectedFiles.value.length === 0) throw new Error('请先选择文件');
       const formData = new FormData();
-      selectedFiles.value.forEach(file => {
-        formData.append('files', file);
-      });
-      // 注意：后端 parse_multipart_files 是手动解析的，直接发送即可
-      response = await fetch('/api/scan/files', {
-        method: 'POST',
-        body: formData
-      });
+      selectedFiles.value.forEach(file => formData.append('files', file));
+      response = await fetch('/api/scan/files', { method: 'POST', body: formData });
     }
+
+    const elapsed = Date.now() - startTime;
+    const remaining = Math.max(0, MIN_SCAN_DURATION - elapsed);
+    if (remaining > 0) await new Promise(r => setTimeout(r, remaining));
 
     if (!response.ok) {
       const errData = await readJsonResponse(response, `扫描失败（HTTP ${response.status}）`);
       throw new Error(errData.detail || '扫描失败');
     }
-
     scanResult.value = await readJsonResponse(response, '扫描接口没有返回有效结果');
+
+    // 进度条填满
+    scanProgress.value = 100;
+    await new Promise(r => setTimeout(r, 200));
+
+    // 数字动画
+    await nextTick();
+    animateCount(animatedSourceCount, scanResult.value.summary.source_count);
+    animateCount(animatedFindingCount, scanResult.value.summary.finding_count);
+    animateCount(animatedAlgoCount, algoCount.value);
   } catch (err) {
     errorMsg.value = err.message;
   } finally {
+    clearInterval(scanMsgTimer);
+    clearInterval(progressInterval);
     isScanning.value = false;
   }
 };
 
 const toggleFinding = (id) => {
-  if (expandedFindings.value.has(id)) {
-    expandedFindings.value.delete(id);
-  } else {
-    expandedFindings.value.add(id);
-  }
+  if (expandedFindings.value.has(id)) expandedFindings.value.delete(id);
+  else expandedFindings.value.add(id);
 };
 
 const getCodeSnippet = (fileName, lineNum) => {
   if (!scanResult.value) return [];
   const source = scanResult.value.sources.find(s => s.file_name === fileName);
   if (!source) return [];
-  
   const lines = source.content.split('\n');
   const start = Math.max(0, lineNum - 4);
   const end = Math.min(lines.length, lineNum + 3);
-  
   return lines.slice(start, end).map((text, idx) => ({
-    number: start + idx + 1,
-    text,
-    isTarget: start + idx + 1 === lineNum
+    number: start + idx + 1, text, isTarget: start + idx + 1 === lineNum
   }));
 };
 
@@ -160,8 +213,7 @@ const exportMarkdown = async () => {
   if (!scanResult.value) return;
   try {
     const response = await fetch('/api/report/markdown', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         scanned_at: scanResult.value.scanned_at,
         source_type: scanResult.value.source_type,
@@ -169,53 +221,65 @@ const exportMarkdown = async () => {
         findings: scanResult.value.findings
       })
     });
-
     if (!response.ok) throw new Error('导出报告失败');
-
     const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `quantum-scan-report-${new Date().getTime()}.md`;
+    a.download = `quantum-scan-report-${Date.now()}.md`;
     document.body.appendChild(a);
     a.click();
-    window.URL.revokeObjectURL(url);
+    URL.revokeObjectURL(url);
     document.body.removeChild(a);
-  } catch (err) {
-    alert(err.message);
-  }
+  } catch (err) { alert(err.message); }
 };
 
 const formatTime = (isoStr) => {
   if (!isoStr) return '';
-  // 后端已经返回北京时间字符串，直接截取或稍微格式化
   return isoStr.replace('T', ' ').split('.')[0];
 };
 
-onMounted(() => {
-  // 默认填充 RSA
-});
+const riskBadgeClass = (level) => {
+  if (level.includes('高') || /high|critical/i.test(level)) return 'high';
+  if (level.includes('中') || /medium/i.test(level)) return 'medium';
+  return 'low';
+};
 </script>
 
 <template>
   <div class="app-container">
+    <div class="bg-grid"></div>
+
     <header class="main-header">
       <div class="logo">
-        <span class="icon">🛡️</span>
-        <h1>抗量子迁移风险扫描平台</h1>
+        <span class="logo-marker">&gt;_</span>
+        <h1>Quantum‑Safe Scanner</h1>
+        <span class="logo-divider">·</span>
+        <span class="logo-subtitle">抗量子迁移风险分析平台</span>
       </div>
       <div class="header-actions">
-        <button v-if="scanResult" @click="exportMarkdown" class="btn btn-outline">导出 Markdown 报告</button>
+        <button @click="toggleTheme" class="btn btn-icon" :title="theme === 'light' ? '切换深色模式' : '切换浅色模式'">
+          <span class="theme-icon">{{ theme === 'light' ? '☀' : '☾' }}</span>
+        </button>
+        <button v-if="scanResult" @click="exportMarkdown" class="btn btn-outline">
+          <span class="btn-icon-text">⇩</span> 导出报告
+        </button>
       </div>
     </header>
 
     <main class="main-layout">
-      <!-- 左侧：工作区 -->
+      <!-- 左侧工作区 -->
       <section class="workspace">
         <div class="card">
           <div class="tabs">
-            <button :class="{ active: scanMode === 'snippet' }" @click="toggleMode('snippet')">代码片段扫描</button>
-            <button :class="{ active: scanMode === 'files' }" @click="toggleMode('files')">多文件上传扫描</button>
+            <button :class="{ active: scanMode === 'snippet' }" @click="toggleMode('snippet')">
+              <span class="tab-icon">&lt;/&gt;</span>
+              <span>代码片段</span>
+            </button>
+            <button :class="{ active: scanMode === 'files' }" @click="toggleMode('files')">
+              <span class="tab-icon">⊞</span>
+              <span>文件上传</span>
+            </button>
           </div>
 
           <div class="tab-content">
@@ -227,190 +291,373 @@ onMounted(() => {
               </div>
               <div class="form-group">
                 <label>源代码</label>
-                <textarea v-model="snippetContent" placeholder="在此粘贴 Python 代码..." class="code-editor"></textarea>
+                <div class="editor-wrap">
+                  <div class="editor-line-numbers">
+                    <span v-for="n in snippetContent.split('\n').length" :key="n">{{ n }}</span>
+                  </div>
+                  <textarea
+                    v-model="snippetContent"
+                    placeholder="在此粘贴 Python 代码…"
+                    class="code-editor"
+                    spellcheck="false"
+                  ></textarea>
+                </div>
               </div>
             </div>
 
-            <!-- 文件扫描模式 -->
+            <!-- 文件上传模式 -->
             <div v-else class="upload-area">
-              <div class="upload-dropzone" @click="$refs.fileInput.click()">
+              <div class="upload-dropzone" @click="$refs.fileInput.click()" @dragover.prevent @drop.prevent @drop="(e) => { const dt = e.dataTransfer; if (dt.files.length) { const input = $refs.fileInput; const fake = new DataTransfer(); Array.from(dt.files).forEach(f => fake.items.add(f)); input.files = fake.files; input.dispatchEvent(new Event('change')); } }">
                 <input type="file" ref="fileInput" multiple @change="handleFileSelect" hidden accept=".py,.pyw,.txt" />
                 <div class="dropzone-hint">
-                  <span class="upload-icon">📁</span>
-                  <p>点击或拖拽文件到此处</p>
-                  <small>支持 .py, .pyw, .txt (单文件 ≤ 2MB)</small>
+                  <span class="upload-icon">⬆</span>
+                  <p>拖放或点击选择文件</p>
+                  <small>.py · .pyw · .txt &nbsp; 单文件 ≤ 2MB</small>
                 </div>
               </div>
-              <div v-if="selectedFiles.length > 0" class="file-list">
-                <h4>待扫描文件 ({{ selectedFiles.length }})</h4>
-                <ul>
-                  <li v-for="name in fileList" :key="name">{{ name }}</li>
-                </ul>
-              </div>
+
+              <transition-group name="file-list-enter" tag="div" class="file-list-area">
+                <div v-if="selectedFiles.length > 0" key="header" class="file-list-header">
+                  <span class="file-count-badge">{{ selectedFiles.length }}</span>
+                  个待扫描文件
+                </div>
+                <div v-for="(file, idx) in selectedFiles" :key="file.name + idx" class="file-chip">
+                  <span class="file-chip-icon">▹</span>
+                  <span class="file-chip-name">{{ file.name }}</span>
+                  <span class="file-chip-size">{{ (file.size / 1024).toFixed(1) }} KB</span>
+                  <button @click="removeFile(idx)" class="file-chip-remove" title="移除">×</button>
+                </div>
+              </transition-group>
             </div>
 
             <div class="actions">
-              <button @click="startScan" :disabled="isScanning" class="btn btn-primary">
-                {{ isScanning ? '扫描中...' : '开始扫描' }}
+              <button @click="startScan" :disabled="isScanning" class="btn btn-primary" :class="{ scanning: isScanning }">
+                <span v-if="isScanning" class="btn-spinner"></span>
+                <span v-if="!isScanning" class="btn-scan-icon">▶</span>
+                {{ isScanning ? '分析中…' : '开始扫描' }}
               </button>
             </div>
           </div>
         </div>
 
-        <div v-if="errorMsg" class="error-banner">
-          ⚠️ {{ errorMsg }}
-        </div>
+        <transition name="slide-down">
+          <div v-if="errorMsg" class="error-banner">
+            <span class="err-prefix">✕</span> {{ errorMsg }}
+          </div>
+        </transition>
       </section>
 
-      <!-- 右侧：结果展示区 -->
+      <!-- 右侧结果区 -->
       <section class="results-area">
-        <!-- 欢迎/空状态 -->
+        <!-- 等待状态 -->
         <div v-if="!scanResult && !isScanning && !errorMsg" class="empty-state">
-          <div class="empty-icon">🔍</div>
-          <h2>等待扫描</h2>
-          <p>请在左侧输入代码或上传文件以开始风险评估</p>
+          <div class="empty-icon-wrapper">
+            <span class="empty-icon">&lt;/&gt;</span>
+            <span class="empty-icon-shadow">&lt;/&gt;</span>
+          </div>
+          <h2>准备就绪</h2>
+          <p>输入 Python 代码或上传文件，检测 RSA · ECDSA · DSA · DH 等量子脆弱算法的使用</p>
         </div>
 
         <!-- 扫描中 -->
-        <div v-if="isScanning" class="scanning-state">
-          <div class="loader"></div>
-          <p>正在分析加密算法风险，请稍候...</p>
-        </div>
-
-        <!-- 结果汇总 -->
-        <div v-if="scanResult" class="results-content">
-          <div class="summary-grid">
-            <div class="summary-card">
-              <span class="label">文件总数</span>
-              <span class="value">{{ scanResult.summary.source_count }}</span>
-            </div>
-            <div class="summary-card">
-              <span class="label">发现风险</span>
-              <span class="value danger">{{ scanResult.summary.finding_count }}</span>
-            </div>
-            <div class="summary-card">
-              <span class="label">受影响算法</span>
-              <span class="value">{{ Object.keys(scanResult.summary.algorithm_counts).length }}</span>
-            </div>
-            <div class="summary-card">
-              <span class="label">扫描时间</span>
-              <span class="value small">{{ formatTime(scanResult.scanned_at) }}</span>
-            </div>
-          </div>
-
-          <!-- 无风险提示 -->
-          <div v-if="scanResult.findings.length === 0" class="no-risk-banner">
-            ✅ 扫描完成：未发现已知的传统非对称加密或不安全算法风险。
-          </div>
-
-          <!-- 分组结果列表 -->
-          <div v-else class="findings-list">
-            <div v-for="(findings, fileName) in findingsByFile" :key="fileName" class="file-group">
-              <h3 class="file-title">📄 {{ fileName }}</h3>
-              
-              <div v-for="(f, idx) in findings" :key="idx" class="finding-item">
-                <div class="finding-header">
-                  <span class="line-badge">行 {{ f.line }}</span>
-                  <span class="algo-tag">{{ f.algorithm }}</span>
-                  <span class="risk-desc">{{ f.risk_level }}: {{ f.evidence }}</span>
-                  <button @click="toggleFinding(fileName + idx)" class="btn-text">
-                    {{ expandedFindings.has(fileName + idx) ? '收起代码' : '展开代码' }}
-                  </button>
-                </div>
-
-                <div v-if="expandedFindings.has(fileName + idx)" class="code-view">
-                  <pre><code><div v-for="line in getCodeSnippet(fileName, f.line)" :key="line.number" :class="{ 'highlight-line': line.isTarget }"><span class="line-no">{{ line.number }}</span> {{ line.text }}</div></code></pre>
-                </div>
-
-                <div class="finding-details">
-                  <div class="detail-row">
-                    <strong>原因分析：</strong> <span>{{ f.reason }}</span>
-                  </div>
-                  <div class="detail-row">
-                    <strong>迁移建议：</strong> <span>{{ f.recommendation }}</span>
-                  </div>
+        <transition name="fade">
+          <div v-if="isScanning" class="scanning-state">
+            <div class="scan-progress">
+              <div class="scan-ring">
+                <svg viewBox="0 0 100 100">
+                  <circle class="ring-bg" cx="50" cy="50" r="42" />
+                  <circle class="ring-fg" cx="50" cy="50" r="42" />
+                </svg>
+                <span class="scan-ring-text">⚡</span>
+              </div>
+              <div class="scan-bar-wrap">
+                <div class="scan-bar-track">
+                  <div class="scan-bar-fill" :style="{ width: scanProgress + '%' }"></div>
                 </div>
               </div>
             </div>
+            <p class="scan-label">{{ scanMessages[scanMsgIndex] }}</p>
+            <div class="scan-dots">
+              <span></span><span></span><span></span>
+            </div>
           </div>
-        </div>
+        </transition>
+
+        <!-- 结果 -->
+        <transition name="fade-up">
+          <div v-if="scanResult" class="results-content">
+            <div class="summary-grid">
+              <div class="summary-card">
+                <span class="label">扫描文件</span>
+                <span class="value">{{ animatedSourceCount }}</span>
+              </div>
+              <div class="summary-card accent-danger" :class="{ 'has-findings': animatedFindingCount > 0 }">
+                <span class="label">发现风险</span>
+                <span class="value danger">{{ animatedFindingCount }}</span>
+              </div>
+              <div class="summary-card">
+                <span class="label">涉及算法</span>
+                <span class="value">{{ animatedAlgoCount }}</span>
+              </div>
+              <div class="summary-card">
+                <span class="label">扫描时间</span>
+                <span class="value small">{{ formatTime(scanResult.scanned_at) }}</span>
+              </div>
+            </div>
+
+            <!-- 无风险 -->
+            <div v-if="scanResult.findings.length === 0" class="no-risk-banner">
+              <span class="ok-marker">✓</span>
+              扫描完成，未发现已知量子脆弱公钥算法用法，当前代码安全。
+            </div>
+
+            <!-- Findings -->
+            <div v-else class="findings-list">
+              <div v-for="(findings, fileName) in findingsByFile" :key="fileName" class="file-group">
+                <h3 class="file-title">
+                  <span class="file-icon">◉</span> {{ fileName }}
+                  <span class="file-count">{{ findings.length }} 项风险</span>
+                </h3>
+
+                <transition-group name="finding-item" appear>
+                  <div v-for="(f, idx) in findings" :key="fileName + idx" class="finding-item">
+                    <div class="finding-header" :style="{ borderLeftColor: getRiskStyle(f.risk_level).border }">
+                      <span class="line-badge">L{{ f.line }}</span>
+                      <span class="algo-tag">{{ f.algorithm }}</span>
+                      <span class="risk-badge" :class="riskBadgeClass(f.risk_level)">
+                        {{ f.risk_level }}
+                      </span>
+                      <span class="risk-desc">{{ f.evidence }}</span>
+                      <button @click="toggleFinding(fileName + idx)" class="btn-text">
+                        <span class="btn-arrow" :class="{ open: expandedFindings.has(fileName + idx) }">▸</span>
+                        {{ expandedFindings.has(fileName + idx) ? '收起' : '展开' }}
+                      </button>
+                    </div>
+
+                    <transition name="expand">
+                      <div v-if="expandedFindings.has(fileName + idx)" class="code-view">
+                        <div class="code-view-header">
+                          <span>{{ fileName }} : L{{ f.line }}</span>
+                          <span class="code-lang">{{ snippetFilename.split('.').pop() || 'py' }}</span>
+                        </div>
+                        <pre><code><div v-for="line in getCodeSnippet(fileName, f.line)" :key="line.number" :class="{ 'highlight-line': line.isTarget }"><span class="line-no">{{ line.number }}</span>{{ line.text || ' ' }}</div></code></pre>
+                      </div>
+                    </transition>
+
+                    <div class="finding-details">
+                      <div class="detail-row">
+                        <span class="detail-label">原因</span>
+                        <span class="detail-value">{{ f.reason }}</span>
+                      </div>
+                      <div class="detail-row">
+                        <span class="detail-label">建议</span>
+                        <span class="detail-value">{{ f.recommendation }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </transition-group>
+              </div>
+            </div>
+          </div>
+        </transition>
       </section>
     </main>
   </div>
 </template>
 
 <style>
-/* --- 基础样式 --- */
-:root {
-  --primary-color: #2563eb;
-  --bg-color: #f8fafc;
-  --card-bg: #ffffff;
-  --border-color: #e2e8f0;
-  --text-main: #1e293b;
-  --text-muted: #64748b;
-  --danger-color: #dc2626;
-  --success-color: #16a34a;
-  --highlight-bg: #fef9c3;
+/* ============================================
+   Variables
+   ============================================ */
+:root,
+[data-theme="light"] {
+  --bg-root: #f2f5f8;
+  --bg-surface: #ffffff;
+  --bg-card: #ffffff;
+  --bg-elevated: #f8fafb;
+  --bg-input: #fbfcfd;
+  --border: #e1e6eb;
+  --border-light: #eaedf2;
+  --accent: #0f9b8e;
+  --accent-glow: rgba(15, 155, 142, 0.18);
+  --accent-dim: #0d7d72;
+  --accent-soft: rgba(15, 155, 142, 0.06);
+  --text-primary: #1a2532;
+  --text-secondary: #5b6b7c;
+  --text-muted: #93a3b8;
+  --danger: #e54545;
+  --danger-bg: rgba(229, 69, 69, 0.07);
+  --danger-glow: rgba(229, 69, 69, 0.2);
+  --success: #0f9b8e;
+  --success-bg: rgba(15, 155, 142, 0.07);
+  --warning: #d4790a;
+  --warning-bg: rgba(212, 121, 10, 0.07);
+  --line-badge-bg: #e3eaf1;
+  --line-badge-color: #3d566e;
+  --glow-strong: rgba(15, 155, 142, 0.32);
+  --shadow-card: 0 1px 2px rgba(0,0,0,0.03), 0 4px 12px rgba(0,0,0,0.04);
+  --shadow-lg: 0 2px 6px rgba(0,0,0,0.05), 0 8px 24px rgba(0,0,0,0.06);
+  --grid-color: rgba(0,0,0,0.025);
+  --font-mono: 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  --font-sans: 'Inter', 'Segoe UI', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --transition-theme: background 0.4s ease, color 0.4s ease, border-color 0.4s ease, box-shadow 0.4s ease;
 }
+
+[data-theme="dark"] {
+  --bg-root: #0a0f16;
+  --bg-surface: #131c26;
+  --bg-card: #182230;
+  --bg-elevated: #1d2a38;
+  --bg-input: #101923;
+  --border: #233140;
+  --border-light: #2b3b4c;
+  --accent: #00d4aa;
+  --accent-glow: rgba(0, 212, 170, 0.2);
+  --accent-dim: #00a885;
+  --accent-soft: rgba(0, 212, 170, 0.05);
+  --text-primary: #e3ecf4;
+  --text-secondary: #8c9eb0;
+  --text-muted: #546678;
+  --danger: #ff5c72;
+  --danger-bg: rgba(255, 92, 114, 0.08);
+  --danger-glow: rgba(255, 92, 114, 0.2);
+  --success: #00d4aa;
+  --success-bg: rgba(0, 212, 170, 0.07);
+  --warning: #f0a040;
+  --warning-bg: rgba(240, 160, 64, 0.08);
+  --line-badge-bg: #1c3046;
+  --line-badge-color: #7abae8;
+  --glow-strong: rgba(0, 212, 170, 0.38);
+  --shadow-card: 0 1px 2px rgba(0,0,0,0.25), 0 4px 12px rgba(0,0,0,0.25);
+  --shadow-lg: 0 2px 6px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.3);
+  --grid-color: rgba(255,255,255,0.018);
+}
+
+* { box-sizing: border-box; }
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background-color: var(--bg-color);
-  color: var(--text-main);
+  font-family: var(--font-sans);
+  background: var(--bg-root);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: var(--transition-theme);
 }
 
 .app-container {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  min-height: 100vh;
+  position: relative;
+  transition: var(--transition-theme);
 }
 
-/* --- 页眉 --- */
+/* 背景网格 */
+.bg-grid {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(var(--grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: radial-gradient(ellipse 70% 55% at 50% 40%, black 28%, transparent 72%);
+  transition: var(--transition-theme);
+}
+
+.main-header,
+.main-layout { position: relative; z-index: 1; }
+
+/* ============================================
+   Header
+   ============================================ */
 .main-header {
-  background: #1e293b;
-  color: white;
-  padding: 0.75rem 1.5rem;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  height: 54px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  padding: 0 1.5rem;
+  flex-shrink: 0;
+  transition: var(--transition-theme);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.025);
 }
 
 .logo {
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
+.logo-marker {
+  font-family: var(--font-mono);
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--accent);
+  text-shadow: 0 0 14px var(--glow-strong);
+  animation: marker-pulse 3s ease-in-out infinite;
+}
+
+@keyframes marker-pulse {
+  0%, 100% { opacity: 1; text-shadow: 0 0 14px var(--glow-strong); }
+  50% { opacity: 0.65; text-shadow: 0 0 6px var(--glow-strong); }
 }
 
 .logo h1 {
   margin: 0;
-  font-size: 1.25rem;
-  font-weight: 600;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
 }
 
-/* --- 布局 --- */
+.logo-divider {
+  color: var(--text-muted);
+  font-weight: 300;
+  font-size: 1.1rem;
+}
+
+.logo-subtitle {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* ============================================
+   Layout
+   ============================================ */
 .main-layout {
   display: flex;
   flex: 1;
   overflow: hidden;
-  padding: 1.5rem;
-  gap: 1.5rem;
+  max-width: 1320px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 1.1rem;
+  gap: 1.1rem;
 }
 
 @media (max-width: 1024px) {
-  .main-layout {
-    flex-direction: column;
-    overflow-y: auto;
-  }
-  .app-container { height: auto; }
+  .main-layout { flex-direction: column; overflow-y: auto; }
 }
 
 .workspace {
-  flex: 0 0 450px;
+  flex: 0 0 460px;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.65rem;
+  min-width: 0;
 }
 
 @media (max-width: 1024px) {
@@ -420,264 +667,902 @@ body {
 .results-area {
   flex: 1;
   overflow-y: auto;
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 1.5rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.15rem;
+  min-width: 0;
+  transition: var(--transition-theme);
+  box-shadow: var(--shadow-card);
 }
 
-/* --- 卡片与表单 --- */
+/* ============================================
+   Card
+   ============================================ */
 .card {
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  transition: all 0.3s;
+  box-shadow: var(--shadow-card);
 }
 
+.card:hover { box-shadow: var(--shadow-lg); }
+
+/* ============================================
+   Tabs
+   ============================================ */
 .tabs {
   display: flex;
-  background: #f1f5f9;
-  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  transition: var(--transition-theme);
 }
 
 .tabs button {
   flex: 1;
-  padding: 0.75rem;
+  padding: 0.68rem 0.5rem;
   border: none;
-  background: none;
+  background: transparent;
   cursor: pointer;
   font-weight: 500;
+  font-size: 0.84rem;
   color: var(--text-muted);
-  transition: all 0.2s;
+  transition: all 0.25s;
+  font-family: var(--font-sans);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  position: relative;
 }
 
+.tab-icon { font-size: 0.88rem; opacity: 0.7; transition: opacity 0.25s; }
+
+.tabs button:hover { color: var(--text-secondary); }
+.tabs button:hover .tab-icon { opacity: 1; }
 .tabs button.active {
-  background: var(--card-bg);
-  color: var(--primary-color);
-  box-shadow: inset 0 -2px 0 var(--primary-color);
+  background: var(--bg-card);
+  color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+  font-weight: 600;
 }
+.tabs button.active .tab-icon { opacity: 1; }
 
-.tab-content {
-  padding: 1rem;
-}
+/* ============================================
+   Form
+   ============================================ */
+.tab-content { padding: 0.95rem; }
 
-.form-group {
-  margin-bottom: 1rem;
-}
+.form-group { margin-bottom: 0.75rem; }
 
 .form-group label {
   display: block;
-  font-size: 0.875rem;
-  margin-bottom: 0.4rem;
-  font-weight: 500;
+  font-size: 0.75rem;
+  margin-bottom: 0.35rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .input-field {
   width: 100%;
-  padding: 0.5rem;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  box-sizing: border-box;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 0.86rem;
+  transition: all 0.25s;
 }
+
+.input-field:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.input-field::placeholder { color: var(--text-muted); font-size: 0.84rem; }
+
+/* 编辑器 + 行号 */
+.editor-wrap {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: all 0.25s;
+  background: var(--bg-input);
+}
+
+.editor-wrap:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.editor-line-numbers {
+  padding: 0.75rem 0.35rem 0.75rem 0.55rem;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  text-align: right;
+  user-select: none;
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border);
+  min-width: 2.6rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.editor-line-numbers span { line-height: 1.6; }
 
 .code-editor {
-  width: 100%;
-  height: 350px;
-  font-family: 'Fira Code', 'Courier New', monospace;
-  font-size: 13px;
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
   padding: 0.75rem;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
   resize: none;
-  box-sizing: border-box;
+  tab-size: 4;
+  outline: none;
+  min-height: 270px;
 }
 
+.code-editor::placeholder { color: var(--text-muted); }
+
+/* ============================================
+   Upload
+   ============================================ */
 .upload-dropzone {
-  border: 2px dashed var(--border-color);
-  border-radius: 8px;
-  padding: 2rem;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem 1.2rem;
   text-align: center;
   cursor: pointer;
-  transition: border-color 0.2s;
+  transition: all 0.3s;
+  background: var(--bg-input);
+  position: relative;
+  overflow: hidden;
+}
+
+.upload-dropzone::after {
+  content: '';
+  position: absolute;
+  inset: -50%;
+  background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+  opacity: 0;
+  transition: opacity 0.3s;
 }
 
 .upload-dropzone:hover {
-  border-color: var(--primary-color);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.upload-dropzone:hover::after { opacity: 1; }
+
+.dropzone-hint { position: relative; z-index: 1; }
+
+.upload-icon {
+  font-size: 2rem;
+  display: block;
+  margin-bottom: 0.55rem;
+  animation: float 2.8s ease-in-out infinite;
 }
 
-.upload-icon { font-size: 2.5rem; margin-bottom: 1rem; display: block; }
-
-.file-list {
-  margin-top: 1rem;
-  max-height: 200px;
-  overflow-y: auto;
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-7px); }
 }
 
-.file-list h4 { margin: 0 0 0.5rem 0; font-size: 0.9rem; }
-.file-list ul { padding-left: 1.25rem; margin: 0; color: var(--text-muted); font-size: 0.85rem; }
+.dropzone-hint p {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.92rem;
+}
+.dropzone-hint small {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
 
-.actions { margin-top: 1rem; }
+.file-list-area {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.65rem;
+}
+
+.file-list-header {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.1rem 0;
+}
+
+.file-count-badge {
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.08rem 0.45rem;
+  border-radius: 20px;
+  min-width: 1.4rem;
+  text-align: center;
+}
+
+.file-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.45rem 0.55rem;
+  font-size: 0.8rem;
+  transition: all 0.2s;
+}
+
+.file-chip:hover {
+  border-color: var(--border-light);
+  box-shadow: var(--shadow-card);
+}
+
+.file-chip-icon {
+  color: var(--accent);
+  font-size: 0.7rem;
+  flex-shrink: 0;
+}
+
+.file-chip-name {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.file-chip-size {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  flex-shrink: 0;
+}
+
+.file-chip-remove {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 1rem;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.2s;
+  line-height: 1;
+}
+
+.file-chip-remove:hover {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-color: rgba(229, 69, 69, 0.2);
+}
+
+/* ============================================
+   Buttons
+   ============================================ */
+.actions { margin-top: 0.6rem; }
 
 .btn {
-  padding: 0.6rem 1.25rem;
-  border-radius: 4px;
-  font-weight: 500;
+  padding: 0.58rem 1.15rem;
+  border-radius: var(--radius);
+  font-weight: 600;
+  font-size: 0.86rem;
   cursor: pointer;
   border: none;
-  transition: opacity 0.2s;
+  font-family: var(--font-sans);
+  transition: all 0.25s;
+  position: relative;
+  overflow: hidden;
 }
 
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.btn-primary { background: var(--primary-color); color: white; width: 100%; }
-.btn-outline { background: transparent; border: 1px solid #ffffff; color: white; font-size: 0.85rem; }
-.btn-text { background: none; color: var(--primary-color); font-size: 0.85rem; padding: 0; }
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+  color: #fff;
+  width: 100%;
+  letter-spacing: 0.03em;
+}
 
+.btn-primary::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
+  transform: translateX(-100%);
+  transition: transform 0.55s;
+}
+
+.btn-primary:hover:not(:disabled)::after { transform: translateX(100%); }
+.btn-primary:hover:not(:disabled) {
+  box-shadow: 0 4px 24px var(--glow-strong);
+  transform: translateY(-1px);
+}
+
+.btn-primary.scanning {
+  background: var(--text-muted);
+  pointer-events: none;
+}
+
+.btn-scan-icon {
+  font-size: 0.75rem;
+  margin-right: 0.3rem;
+}
+
+.btn-spinner {
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,0.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.65s linear infinite;
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 0.4rem;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  padding: 0.4rem 0.8rem;
+}
+
+.btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+.btn-icon-text { margin-right: 0.2rem; font-family: var(--font-mono); font-weight: 700; }
+
+.btn-icon {
+  background: transparent;
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  width: 32px; height: 32px;
+  padding: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.25s;
+}
+
+.btn-icon:hover { border-color: var(--accent); color: var(--accent); }
+.theme-icon { line-height: 1; transition: transform 0.3s; }
+.btn-icon:hover .theme-icon { transform: rotate(30deg); }
+
+/* 展开按钮 */
+.btn-text {
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.76rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.btn-text:hover { border-color: var(--accent); background: var(--accent-soft); }
+.btn-text:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-glow); }
+
+.btn-arrow {
+  display: inline-block;
+  transition: transform 0.25s;
+  font-size: 0.65rem;
+}
+.btn-arrow.open { transform: rotate(90deg); }
+
+/* ============================================
+   Error
+   ============================================ */
 .error-banner {
-  background: #fef2f2;
-  color: var(--danger-color);
-  padding: 0.75rem;
-  border-radius: 4px;
-  border: 1px solid #fee2e2;
-  font-size: 0.875rem;
+  background: var(--danger-bg);
+  color: var(--danger);
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--radius);
+  border: 1px solid rgba(229, 69, 69, 0.18);
+  font-size: 0.82rem;
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
-/* --- 结果区域 --- */
-.empty-state, .scanning-state {
+.err-prefix { font-weight: 800; font-size: 0.9rem; }
+
+/* ============================================
+   Empty State
+   ============================================ */
+.empty-state {
   height: 100%;
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  color: var(--text-muted);
+  text-align: center;
 }
 
-.empty-icon { font-size: 4rem; margin-bottom: 1rem; }
-
-.loader {
-  border: 3px solid #f3f3f3;
-  border-top: 3px solid var(--primary-color);
-  border-radius: 50%;
-  width: 40px;
-  height: 40px;
-  animation: spin 1s linear infinite;
+.empty-icon-wrapper {
+  position: relative;
   margin-bottom: 1rem;
 }
 
-@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-
-.summary-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 1rem;
-  margin-bottom: 2rem;
+.empty-icon {
+  font-family: var(--font-mono);
+  font-size: 3.6rem;
+  font-weight: 800;
+  color: var(--border-light);
+  position: relative;
+  z-index: 1;
 }
 
-.summary-card {
-  background: #f8fafc;
-  padding: 1rem;
-  border-radius: 6px;
+.empty-icon-shadow {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: var(--font-mono);
+  font-size: 5rem;
+  font-weight: 800;
+  color: var(--border);
+  z-index: 0;
+  filter: blur(14px);
+}
+
+.empty-state h2 {
+  color: var(--text-secondary);
+  margin-bottom: 0.35rem;
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+.empty-state p {
+  font-size: 0.85rem;
+  margin: 0;
+  color: var(--text-muted);
+  max-width: 350px;
+  line-height: 1.55;
+}
+
+/* ============================================
+   Scanning
+   ============================================ */
+.scanning-state {
+  height: 100%;
   display: flex;
   flex-direction: column;
+  justify-content: center;
   align-items: center;
-  border: 1px solid var(--border-color);
-}
-
-.summary-card .label { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem; }
-.summary-card .value { font-size: 1.5rem; font-weight: 700; }
-.summary-card .value.danger { color: var(--danger-color); }
-.summary-card .value.small { font-size: 0.85rem; text-align: center; }
-
-.no-risk-banner {
-  background: #f0fdf4;
-  color: var(--success-color);
-  padding: 1rem;
-  border-radius: 6px;
   text-align: center;
-  border: 1px solid #dcfce7;
 }
 
-/* --- Findings 列表 --- */
-.file-group { margin-bottom: 2rem; }
-.file-title {
-  border-bottom: 2px solid var(--border-color);
-  padding-bottom: 0.5rem;
-  font-size: 1.1rem;
-  margin-bottom: 1rem;
+.scan-progress { margin-bottom: 1.1rem; display: flex; flex-direction: column; align-items: center; gap: 1rem; }
+
+.scan-ring {
+  width: 90px; height: 90px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.finding-item {
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  margin-bottom: 1rem;
+.scan-ring svg { width: 100%; height: 100%; animation: ring-rotate 2s linear infinite; }
+
+@keyframes ring-rotate { to { transform: rotate(360deg); } }
+
+.ring-bg { fill: none; stroke: var(--border); stroke-width: 3; }
+
+.ring-fg {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-dasharray: 180 280;
+  stroke-linecap: round;
+  animation: ring-dash 1.5s ease-in-out infinite;
+  filter: drop-shadow(0 0 8px var(--glow-strong));
+}
+
+@keyframes ring-dash {
+  0% { stroke-dasharray: 40 280; }
+  50% { stroke-dasharray: 200 280; }
+  100% { stroke-dasharray: 40 280; }
+}
+
+.scan-ring-text {
+  position: absolute;
+  font-size: 1.6rem;
+  animation: marker-pulse 1.2s ease-in-out infinite;
+}
+
+/* 进度条 */
+.scan-bar-wrap { width: 240px; }
+.scan-bar-track {
+  height: 3px;
+  border-radius: 3px;
+  background: var(--border-light);
   overflow: hidden;
 }
 
-.finding-header {
-  background: #f1f5f9;
-  padding: 0.75rem;
+.scan-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-dim));
+  transition: width 0.3s ease;
+  box-shadow: 0 0 8px var(--glow-strong);
+}
+
+.scan-label {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  margin: 0 0 0.85rem;
+}
+
+.scan-dots { display: flex; gap: 0.45rem; }
+.scan-dots span {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: dot-bounce 1.4s ease-in-out infinite;
+}
+.scan-dots span:nth-child(2) { animation-delay: 0.2s; }
+.scan-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes dot-bounce {
+  0%, 80%, 100% { transform: scale(0.5); opacity: 0.35; }
+  40% { transform: scale(1.4); opacity: 1; }
+}
+
+/* ============================================
+   Summary
+   ============================================ */
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.6rem;
+  margin-bottom: 1.15rem;
+}
+
+@media (max-width: 768px) {
+  .summary-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.summary-card {
+  background: var(--bg-elevated);
+  padding: 0.8rem 0.5rem;
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border: 1px solid var(--border);
+  transition: all 0.3s;
+  position: relative;
+  overflow: hidden;
+  cursor: default;
+}
+
+.summary-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-card); }
+
+.summary-card .label {
+  font-size: 0.67rem;
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+
+.summary-card .value {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  transition: color 0.3s;
+}
+
+.summary-card .value.danger { transition: all 0.5s; }
+.summary-card.accent-danger.has-findings .value.danger {
+  color: var(--danger);
+  text-shadow: 0 0 14px var(--danger-glow);
+}
+.summary-card .value.small { font-size: 0.74rem; color: var(--text-secondary); }
+
+.summary-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 20%; right: 20%;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--border-light);
+  transition: background 0.3s;
+}
+.summary-card.accent-danger.has-findings::before { background: var(--danger); }
+
+/* ============================================
+   No Risk
+   ============================================ */
+.no-risk-banner {
+  background: var(--success-bg);
+  color: var(--success);
+  padding: 0.9rem 1.1rem;
+  border-radius: var(--radius);
+  text-align: center;
+  border: 1px solid rgba(15, 155, 142, 0.15);
+  font-size: 0.87rem;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.ok-marker {
+  font-family: var(--font-mono);
+  font-weight: 800;
+  background: var(--success);
+  color: #fff;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  margin-right: 0.35rem;
+  font-size: 0.75rem;
+}
+
+/* ============================================
+   Findings
+   ============================================ */
+.findings-list { display: flex; flex-direction: column; gap: 1.1rem; }
+
+.file-group:last-child { margin-bottom: 0; }
+
+.file-title {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.4rem;
+  margin: 0 0 0.65rem;
+  font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.4rem;
+}
+
+.file-icon { font-size: 0.75rem; color: var(--accent); }
+.file-count {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  padding: 0.12rem 0.55rem;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+}
+
+.finding-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 0.55rem;
+  overflow: hidden;
+  background: var(--bg-elevated);
+  transition: all 0.3s;
+}
+
+.finding-item:hover { box-shadow: var(--shadow-card); }
+
+.finding-header {
+  padding: 0.55rem 0.7rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   flex-wrap: wrap;
+  border-left: 3px solid var(--accent);
+  transition: border-color 0.3s;
 }
 
 .line-badge {
-  background: #475569;
-  color: white;
-  padding: 0.1rem 0.4rem;
+  background: var(--line-badge-bg);
+  color: var(--line-badge-color);
+  padding: 0.1rem 0.45rem;
   border-radius: 3px;
-  font-size: 0.75rem;
-  font-family: monospace;
-}
-
-.algo-tag {
-  background: #dbeafe;
-  color: var(--primary-color);
-  padding: 0.1rem 0.5rem;
-  border-radius: 12px;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
   font-weight: 600;
 }
 
-.risk-desc { flex: 1; font-weight: 500; font-size: 0.9rem; }
-
-.code-view {
-  background: #fafafa;
-  border-bottom: 1px solid var(--border-color);
-  padding: 0.5rem;
-  overflow-x: auto;
+.algo-tag {
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 0.1rem 0.5rem;
+  border-radius: 20px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+  border: 1px solid rgba(15, 155, 142, 0.1);
 }
 
-.code-view pre { margin: 0; font-size: 12px; line-height: 1.5; }
-.code-view code { font-family: 'Fira Code', monospace; }
+.risk-badge {
+  padding: 0.12rem 0.52rem;
+  border-radius: 20px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.risk-badge.high   { background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(229,69,69,0.15); }
+.risk-badge.medium { background: var(--warning-bg); color: var(--warning); border: 1px solid rgba(212,121,10,0.15); }
+.risk-badge.low    { background: var(--accent-soft); color: var(--accent); border: 1px solid rgba(15,155,142,0.12); }
+
+.risk-desc {
+  flex: 1;
+  font-size: 0.83rem;
+  color: var(--text-primary);
+  min-width: 130px;
+  font-weight: 500;
+}
+
+/* Code view */
+.code-view {
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.code-view-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.38rem 0.65rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+.code-lang {
+  background: var(--accent-glow);
+  color: var(--accent);
+  padding: 0.05rem 0.45rem;
+  border-radius: 3px;
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.code-view pre {
+  margin: 0;
+  padding: 0.5rem 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  font-family: var(--font-mono);
+}
 
 .highlight-line {
-  background: var(--highlight-bg);
+  background: var(--accent-glow);
+  border-left: 3px solid var(--accent);
   display: block;
-  width: 100%;
 }
 
 .line-no {
-  color: #94a3b8;
-  width: 2rem;
+  color: var(--text-muted);
+  width: 2.4rem;
   display: inline-block;
   text-align: right;
-  margin-right: 0.5rem;
+  margin-right: 0.65rem;
   user-select: none;
+  font-size: 0.82em;
 }
 
+/* Detail */
 .finding-details {
-  padding: 1rem;
-  font-size: 0.875rem;
-}
-
-.detail-row {
-  margin-bottom: 0.5rem;
+  padding: 0.65rem 0.7rem;
+  font-size: 0.81rem;
   line-height: 1.6;
 }
 
-.detail-row strong { color: #475569; }
+.detail-row {
+  margin-bottom: 0.35rem;
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+
+.detail-row:last-child { margin-bottom: 0; }
+
+.detail-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent-dim);
+  background: var(--accent-soft);
+  padding: 0.06rem 0.45rem;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.detail-value { color: var(--text-secondary); word-break: break-word; }
+
+/* ============================================
+   Transitions
+   ============================================ */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.35s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+
+.fade-up-enter-active { transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1); }
+.fade-up-leave-active { transition: all 0.2s ease-in; }
+.fade-up-enter-from { opacity: 0; transform: translateY(20px); }
+.fade-up-leave-to { opacity: 0; transform: translateY(-10px); }
+
+.slide-down-enter-active { transition: all 0.3s ease-out; }
+.slide-down-leave-active { transition: all 0.2s ease-in; }
+.slide-down-enter-from { opacity: 0; transform: translateY(-8px); }
+.slide-down-leave-to { opacity: 0; transform: translateY(-8px); }
+
+.expand-enter-active { transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1); overflow: hidden; }
+.expand-leave-active { transition: all 0.25s ease-in; overflow: hidden; }
+.expand-enter-from, .expand-leave-to { max-height: 0; opacity: 0; }
+
+.finding-item-enter-active { transition: all 0.45s cubic-bezier(0.16, 1, 0.3, 1); }
+.finding-item-leave-active { transition: all 0.2s ease-in; }
+.finding-item-enter-from { opacity: 0; transform: translateX(-14px); }
+.finding-item-leave-to { opacity: 0; transform: translateX(14px); }
+
+.file-list-enter-active { transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
+.file-list-leave-active { transition: all 0.2s ease-in; position: absolute; }
+.file-list-enter-from { opacity: 0; transform: translateY(-6px); }
+.file-list-leave-to { opacity: 0; transform: scale(0.95); }
+.file-list-move { transition: transform 0.3s; }
+
+/* ============================================
+   Scrollbar
+   ============================================ */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ============================================
+   Responsive
+   ============================================ */
+@media (max-width: 1024px) {
+  .main-header { padding: 0 1rem; }
+  .logo h1 { font-size: 0.9rem; }
+  .logo-subtitle { display: none; }
+  .logo-divider { display: none; }
+  .main-layout { padding: 0.75rem; max-width: 100%; }
+}
 </style>
