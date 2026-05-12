@@ -40,8 +40,8 @@ try {
 
     Write-Host "Starting frontend on http://$FrontendHost`:$FrontendPort/static/"
     $FrontendProcess = Start-Process `
-        -FilePath "npm" `
-        -ArgumentList @("run", "dev", "--", "--host", $FrontendHost, "--port", $FrontendPort) `
+        -FilePath "cmd.exe" `
+        -ArgumentList @("/c", "npm run dev -- --host $FrontendHost --port $FrontendPort") `
         -WorkingDirectory $WebRoot `
         -PassThru `
         -NoNewWindow
