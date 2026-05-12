@@ -61,6 +61,66 @@ class QuantumScannerTests(unittest.TestCase):
         findings = scan_source_for_crypto(source, filename="safe_sample.py")
         self.assertEqual(findings, [])
 
+    def test_detects_modern_curve_api_usage(self) -> None:
+        source = "\n".join(
+            [
+                "from cryptography.hazmat.primitives.asymmetric import x25519, ed25519",
+                "exchange_key = x25519.X25519PrivateKey.generate()",
+                "signing_key = ed25519.Ed25519PrivateKey.generate()",
+            ]
+        )
+
+        findings = scan_source_for_crypto(source, filename="modern_curves.py")
+
+        self.assertEqual([finding["algorithm"] for finding in findings], ["X25519", "Ed25519"])
+        self.assertEqual([finding["line"] for finding in findings], [2, 3])
+
+    def test_detects_protocol_algorithm_identifiers(self) -> None:
+        source = "\n".join(
+            [
+                'jwt_algorithm = "RS256"',
+                'ssh_algorithm = "ssh-rsa"',
+                'ecdsa_algorithm = "ecdsa-sha2-nistp256"',
+            ]
+        )
+
+        findings = scan_source_for_crypto(source, filename="protocol_config.py")
+
+        self.assertEqual(
+            [finding["algorithm"] for finding in findings],
+            ["RSA", "RSA", "ECDSA"],
+        )
+        self.assertTrue(all("算法标识" in finding["evidence"] for finding in findings))
+
+    def test_detects_pem_key_material_headers(self) -> None:
+        source = "\n".join(
+            [
+                "-----BEGIN RSA PRIVATE KEY-----",
+                "-----BEGIN EC PRIVATE KEY-----",
+                "-----BEGIN DSA PRIVATE KEY-----",
+            ]
+        )
+
+        findings = scan_source_for_crypto(source, filename="keys.pem")
+
+        self.assertEqual(
+            [finding["algorithm"] for finding in findings],
+            ["RSA", "ECC", "DSA"],
+        )
+        self.assertTrue(all("PEM" in finding["evidence"] for finding in findings))
+
+    def test_human_explanation_does_not_trigger_protocol_identifier_scan(self) -> None:
+        source = "\n".join(
+            [
+                'note = "RSA and ECDSA are discussed in this document"',
+                'comment = "X25519 appears only as free text, not a configured algorithm"',
+            ]
+        )
+
+        findings = scan_source_for_crypto(source, filename="notes.py")
+
+        self.assertEqual(findings, [])
+
     def test_missing_file_returns_non_zero_exit_code(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         result = subprocess.run(

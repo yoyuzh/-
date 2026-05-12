@@ -35,7 +35,7 @@ class BackendApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("抗量子迁移风险扫描平台", response.text)
-        self.assertIn("/static/app.js", response.text)
+        self.assertIn("/static/assets/", response.text)
 
     def test_scan_files_accepts_multiple_uploaded_sources(self) -> None:
         rsa_source = "\n".join(

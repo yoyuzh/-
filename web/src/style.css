@@ -1,0 +1,14 @@
+/* Minimal resets for Quantum Crypto Scanner */
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+#app {
+  height: 100%;
+}

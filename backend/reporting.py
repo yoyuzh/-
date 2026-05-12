@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Optional
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 
@@ -29,7 +29,7 @@ def build_markdown_report(
     sources: list[dict[str, Any]],
     findings: list[dict[str, Any]],
     source_type: str,
-    scanned_at: str | None = None,
+    scanned_at: Optional[str] = None,
 ) -> str:
     generated_at = scanned_at or beijing_now_iso()
     summary = build_summary(sources, findings)

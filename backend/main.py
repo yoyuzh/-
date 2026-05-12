@@ -4,7 +4,7 @@ from email import policy
 from email.parser import BytesParser
 from pathlib import Path
 from pathlib import PurePath
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
@@ -62,7 +62,7 @@ class ScanResponse(BaseModel):
 
 
 class ReportRequest(BaseModel):
-    scanned_at: str | None = None
+    scanned_at: Optional[str] = None
     source_type: SourceType = "manual_upload"
     sources: list[SourceRecord] = Field(default_factory=list)
     findings: list[FindingRecord] = Field(default_factory=list)

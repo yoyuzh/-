@@ -71,6 +71,30 @@ VULNERABLE_ALGOS: dict[str, AlgorithmProfile] = {
         reason="ECC 家族依赖椭圆曲线离散对数问题，量子算法可系统性破坏其安全假设。",
         recommendation="按用途迁移到 FIPS 203 ML-KEM 或 FIPS 204 ML-DSA。",
     ),
+    "x25519": AlgorithmProfile(
+        name="X25519",
+        risk_level="高风险",
+        reason="X25519 属于椭圆曲线 Diffie-Hellman 密钥交换，量子计算可高效求解其离散对数基础。",
+        recommendation="密钥交换迁移到 FIPS 203 ML-KEM，或在过渡期使用经评估的混合密钥交换。",
+    ),
+    "x448": AlgorithmProfile(
+        name="X448",
+        risk_level="高风险",
+        reason="X448 属于椭圆曲线 Diffie-Hellman 密钥交换，量子计算可高效求解其离散对数基础。",
+        recommendation="密钥交换迁移到 FIPS 203 ML-KEM，或在过渡期使用经评估的混合密钥交换。",
+    ),
+    "ed25519": AlgorithmProfile(
+        name="Ed25519",
+        risk_level="高风险",
+        reason="Ed25519 属于椭圆曲线签名算法，量子攻击下其离散对数安全假设不再成立。",
+        recommendation="签名迁移到 FIPS 204 ML-DSA；长期归档或高安全等级场景可评估 FIPS 205 SLH-DSA。",
+    ),
+    "ed448": AlgorithmProfile(
+        name="Ed448",
+        risk_level="高风险",
+        reason="Ed448 属于椭圆曲线签名算法，量子攻击下其离散对数安全假设不再成立。",
+        recommendation="签名迁移到 FIPS 204 ML-DSA；长期归档或高安全等级场景可评估 FIPS 205 SLH-DSA。",
+    ),
 }
 
 
@@ -103,6 +127,58 @@ DIRECT_REGEX_RULES: tuple[tuple[str, re.Pattern[str], str], ...] = (
         "cryptography.hazmat.primitives.asymmetric.ec.ECDSA",
     ),
     ("ecdsa", re.compile(r"\becdsa\.SigningKey\.generate\s*\("), "ecdsa.SigningKey.generate"),
+    (
+        "x25519",
+        re.compile(
+            r"\bcryptography\.hazmat\.primitives\.asymmetric\.x25519\.X25519PrivateKey\.generate\s*\("
+        ),
+        "cryptography.hazmat.primitives.asymmetric.x25519.X25519PrivateKey.generate",
+    ),
+    (
+        "x448",
+        re.compile(
+            r"\bcryptography\.hazmat\.primitives\.asymmetric\.x448\.X448PrivateKey\.generate\s*\("
+        ),
+        "cryptography.hazmat.primitives.asymmetric.x448.X448PrivateKey.generate",
+    ),
+    (
+        "ed25519",
+        re.compile(
+            r"\bcryptography\.hazmat\.primitives\.asymmetric\.ed25519\.Ed25519PrivateKey\.generate\s*\("
+        ),
+        "cryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PrivateKey.generate",
+    ),
+    (
+        "ed448",
+        re.compile(
+            r"\bcryptography\.hazmat\.primitives\.asymmetric\.ed448\.Ed448PrivateKey\.generate\s*\("
+        ),
+        "cryptography.hazmat.primitives.asymmetric.ed448.Ed448PrivateKey.generate",
+    ),
+)
+
+
+SENSITIVE_STRING_CONTEXT_RE = re.compile(
+    r"(algorithm|alg|jwt|ssh|tls|ssl|cipher|signature|key|pem|cert|certificate)",
+    re.IGNORECASE,
+)
+
+
+STRING_IDENTIFIER_RULES: tuple[tuple[str, re.Pattern[str], str], ...] = (
+    ("rsa", re.compile(r"\b(?:RS(?:256|384|512)|PS(?:256|384|512)|ssh-rsa|rsa-sha2-\d+)\b"), "算法标识"),
+    ("dsa", re.compile(r"\b(?:ssh-dss|DSA)\b"), "算法标识"),
+    ("ecdsa", re.compile(r"\b(?:ES(?:256|384|512)|ecdsa-sha2-[A-Za-z0-9_-]+)\b"), "算法标识"),
+    ("ed25519", re.compile(r"\b(?:EdDSA|Ed25519|ssh-ed25519)\b"), "算法标识"),
+    ("ed448", re.compile(r"\b(?:Ed448)\b"), "算法标识"),
+    ("x25519", re.compile(r"\b(?:X25519|x25519)\b"), "算法标识"),
+    ("x448", re.compile(r"\b(?:X448|x448)\b"), "算法标识"),
+)
+
+
+PEM_HEADER_RULES: tuple[tuple[str, re.Pattern[str], str], ...] = (
+    ("rsa", re.compile(r"-----BEGIN (?:RSA )?(?:PRIVATE|PUBLIC) KEY-----"), "PEM RSA key header"),
+    ("dsa", re.compile(r"-----BEGIN DSA (?:PRIVATE|PUBLIC) KEY-----"), "PEM DSA key header"),
+    ("ecc", re.compile(r"-----BEGIN EC (?:PRIVATE|PUBLIC) KEY-----"), "PEM EC key header"),
 )
 
 
@@ -131,6 +207,18 @@ ALIAS_REGEX_RULES: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("ecdsa", r"\b{alias}\s*\(", "{alias}"),
         ("ecdsa", r"\b{alias}\.generate\s*\(", "{alias}.generate"),
     ),
+    "x25519": (
+        ("x25519", r"\b{alias}\.X25519PrivateKey\.generate\s*\(", "{alias}.X25519PrivateKey.generate"),
+    ),
+    "x448": (
+        ("x448", r"\b{alias}\.X448PrivateKey\.generate\s*\(", "{alias}.X448PrivateKey.generate"),
+    ),
+    "ed25519": (
+        ("ed25519", r"\b{alias}\.Ed25519PrivateKey\.generate\s*\(", "{alias}.Ed25519PrivateKey.generate"),
+    ),
+    "ed448": (
+        ("ed448", r"\b{alias}\.Ed448PrivateKey\.generate\s*\(", "{alias}.Ed448PrivateKey.generate"),
+    ),
 }
 
 
@@ -139,6 +227,10 @@ MODULE_HINTS: tuple[tuple[str, str], ...] = (
     ("cryptography.hazmat.primitives.asymmetric.dsa", "dsa"),
     ("cryptography.hazmat.primitives.asymmetric.dh", "dh"),
     ("cryptography.hazmat.primitives.asymmetric.ec", "ecc"),
+    ("cryptography.hazmat.primitives.asymmetric.x25519", "x25519"),
+    ("cryptography.hazmat.primitives.asymmetric.x448", "x448"),
+    ("cryptography.hazmat.primitives.asymmetric.ed25519", "ed25519"),
+    ("cryptography.hazmat.primitives.asymmetric.ed448", "ed448"),
     ("Crypto.PublicKey.RSA", "rsa"),
     ("Crypto.PublicKey.DSA", "dsa"),
     ("ecdsa", "ecdsa"),
@@ -154,6 +246,10 @@ NAME_HINTS: dict[str, str] = {
     "ecc": "ecc",
     "ec": "ecc",
     "ellipticcurve": "ecc",
+    "x25519": "x25519",
+    "x448": "x448",
+    "ed25519": "ed25519",
+    "ed448": "ed448",
 }
 
 
@@ -233,6 +329,32 @@ class QuantumCryptoVisitor(ast.NodeVisitor):
                 self.add_finding(node.lineno, algorithm_key, dotted_name)
         self.generic_visit(node)
 
+    def visit_Assign(self, node: ast.Assign) -> None:
+        context = " ".join(get_dotted_name(target) or "" for target in node.targets)
+        self.scan_string_value(node.value, context=context, line=getattr(node, "lineno", 0))
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        context = get_dotted_name(node.target) or ""
+        if node.value is not None:
+            self.scan_string_value(node.value, context=context, line=getattr(node, "lineno", 0))
+        self.generic_visit(node)
+
+    def visit_keyword(self, node: ast.keyword) -> None:
+        context = node.arg or ""
+        self.scan_string_value(node.value, context=context, line=getattr(node.value, "lineno", 0))
+        self.generic_visit(node)
+
+    def scan_string_value(self, node: ast.AST, context: str, line: int) -> None:
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            return
+        if not context or not SENSITIVE_STRING_CONTEXT_RE.search(context):
+            return
+        for algorithm_key, pattern, evidence_prefix in STRING_IDENTIFIER_RULES:
+            match = pattern.search(node.value)
+            if match:
+                self.add_finding(line, algorithm_key, f"{evidence_prefix}: {match.group(0)}")
+
     def resolve_algorithm_from_call(self, dotted_name: str) -> str | None:
         parts = dotted_name.split(".")
         if not parts:
@@ -264,6 +386,14 @@ def resolve_alias_call(alias_algorithm: str, parts: list[str]) -> str | None:
         return "ecdsa"
     if alias_algorithm == "ecdsa" and last_part == "generate":
         return "ecdsa"
+    if alias_algorithm == "x25519" and parts[-2:] == ["X25519PrivateKey", "generate"]:
+        return "x25519"
+    if alias_algorithm == "x448" and parts[-2:] == ["X448PrivateKey", "generate"]:
+        return "x448"
+    if alias_algorithm == "ed25519" and parts[-2:] == ["Ed25519PrivateKey", "generate"]:
+        return "ed25519"
+    if alias_algorithm == "ed448" and parts[-2:] == ["Ed448PrivateKey", "generate"]:
+        return "ed448"
     return None
 
 
@@ -275,6 +405,10 @@ def resolve_direct_call(dotted_name: str) -> str | None:
         "cryptography.hazmat.primitives.asymmetric.ec.generate_private_key": "ecc",
         "cryptography.hazmat.primitives.asymmetric.ec.ECDH": "ecdh",
         "cryptography.hazmat.primitives.asymmetric.ec.ECDSA": "ecdsa",
+        "cryptography.hazmat.primitives.asymmetric.x25519.X25519PrivateKey.generate": "x25519",
+        "cryptography.hazmat.primitives.asymmetric.x448.X448PrivateKey.generate": "x448",
+        "cryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PrivateKey.generate": "ed25519",
+        "cryptography.hazmat.primitives.asymmetric.ed448.Ed448PrivateKey.generate": "ed448",
         "Crypto.PublicKey.RSA.generate": "rsa",
         "Crypto.PublicKey.DSA.generate": "dsa",
         "ecdsa.SigningKey.generate": "ecdsa",
@@ -356,8 +490,29 @@ def scan_with_regex(source: str, aliases: dict[str, str] | None = None) -> list[
     effective_aliases = aliases or extract_aliases_from_source(sanitized_source)
     findings: list[Finding] = []
     seen_keys: set[tuple[int, str]] = set()
-    for line_number, line in enumerate(sanitized_source.splitlines(), start=1):
+    for line_number, (line, raw_line) in enumerate(
+        zip(sanitized_source.splitlines(), source.splitlines()),
+        start=1,
+    ):
         stripped = line.strip()
+        raw_stripped = raw_line.strip()
+        for algorithm_key, pattern, evidence in PEM_HEADER_RULES:
+            if not pattern.search(raw_line):
+                continue
+            profile = VULNERABLE_ALGOS[algorithm_key]
+            finding = Finding(
+                line=line_number,
+                algorithm=profile.name,
+                risk_level=profile.risk_level,
+                reason=profile.reason,
+                recommendation=profile.recommendation,
+                evidence=evidence,
+            )
+            key = (finding.line, finding.algorithm)
+            if key not in seen_keys:
+                findings.append(finding)
+                seen_keys.add(key)
+
         if not stripped:
             continue
 
